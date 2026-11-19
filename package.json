@@ -1,0 +1,28 @@
+{
+  "name": "opencode-image-compact",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Turn images into text for models that cannot accept them, using local OCR with a vision-model fallback, plus an inspect_image tool.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "image",
+    "vision",
+    "ocr"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
