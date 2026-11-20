@@ -7,9 +7,9 @@
  * from a vision-capable OpenCode model. Descriptions are cached by content
  * hash so a screenshot costs one OCR run / one model call ever.
  *
- * Nothing here imports a pi package; the vision fallback launches the
- * `opencode` CLI itself, with a marker env var that stops this plugin from
- * loading in the child (the equivalent of pi's `--no-extensions` guard).
+ * The vision fallback launches a nested `opencode run` call with a marker
+ * environment variable that prevents this plugin from loading in the child and
+ * recursing.
  */
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -68,13 +68,12 @@ export function resolveSettings(options: UnknownRecord = {}): Settings {
   const dataHome = process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share")
   const defaultCacheDir = join(dataHome, "opencode", "cache", "image-compact")
   return {
-    visionModel: str(pick(options, "visionModel", ["OPENCODE_IMAGE_COMPACT_MODEL", "PI_IMAGE_COMPACT_MODEL"])),
-    force: bool(pick(options, "force", ["OPENCODE_IMAGE_COMPACT_FORCE", "PI_IMAGE_COMPACT_FORCE"])) ?? false,
-    timeoutMs: num(pick(options, "timeoutMs", ["OPENCODE_IMAGE_COMPACT_TIMEOUT_MS", "PI_IMAGE_COMPACT_TIMEOUT_MS"])) ?? 120_000,
-    ocrEnabled: bool(pick(options, "ocr", ["OPENCODE_IMAGE_COMPACT_OCR", "PI_IMAGE_COMPACT_OCR"])) ?? true,
-    ocrPsm: str(pick(options, "ocrPsm", ["OPENCODE_IMAGE_COMPACT_OCR_PSM", "PI_IMAGE_COMPACT_OCR_PSM"])) ?? "3",
-    ocrPsmSparse:
-      str(pick(options, "ocrPsmSparse", ["OPENCODE_IMAGE_COMPACT_OCR_PSM_SPARSE", "PI_IMAGE_COMPACT_OCR_PSM_SPARSE"])) ?? "11",
+    visionModel: str(pick(options, "visionModel", ["OPENCODE_IMAGE_COMPACT_MODEL"])),
+    force: bool(pick(options, "force", ["OPENCODE_IMAGE_COMPACT_FORCE"])) ?? false,
+    timeoutMs: num(pick(options, "timeoutMs", ["OPENCODE_IMAGE_COMPACT_TIMEOUT_MS"])) ?? 120_000,
+    ocrEnabled: bool(pick(options, "ocr", ["OPENCODE_IMAGE_COMPACT_OCR"])) ?? true,
+    ocrPsm: str(pick(options, "ocrPsm", ["OPENCODE_IMAGE_COMPACT_OCR_PSM"])) ?? "3",
+    ocrPsmSparse: str(pick(options, "ocrPsmSparse", ["OPENCODE_IMAGE_COMPACT_OCR_PSM_SPARSE"])) ?? "11",
     cacheDir: str(pick(options, "cacheDir", ["OPENCODE_IMAGE_COMPACT_CACHE_DIR"])) ?? defaultCacheDir,
     bin: str(pick(options, "bin", ["OPENCODE_IMAGE_COMPACT_BIN"])) ?? "opencode",
   }
@@ -349,7 +348,7 @@ function imageFrom(part: unknown): ImageBlock | undefined {
   if (!part || typeof part !== "object") return undefined
   const p = part as UnknownRecord
 
-  // pi-style image blocks, kept for defensive compatibility.
+  // Generic image blocks kept for defensive compatibility.
   if (p.type === "image" && typeof p.data === "string") {
     return { data: p.data, mimeType: str(p.mimeType) ?? str(p.mime) ?? "image/png" }
   }
@@ -465,7 +464,7 @@ export async function convertParts(
       })
       if (convertedHere > 0) {
         posts.push(() => {
-          // pi's read-tool note is wrong once a description has been supplied.
+          // Remove "does not support images" notes once a description has been supplied.
           const filtered = nextValue.filter((v) => {
             const text = (v as UnknownRecord | undefined)?.text
             return !(typeof text === "string" && text.includes(NON_VISION_NOTE))

@@ -1,22 +1,15 @@
 # opencode-image-compact
 
-Turns images into text for models that cannot accept them, so a screenshot is
-usable instead of silently disappearing. Native OpenCode V2 plugin; rewritten
-from the pi extension `pi-image-compact`.
+OpenCode plugin that turns images into text for models that cannot accept image input, so screenshots and other images remain usable instead of being dropped.
 
-## The problem
+## How it works
 
-A text-only model drops image input rather than failing: the assistant gets a
-filename or a placeholder and no information. This plugin extracts the text
-while the image bytes still exist:
+When the active model does not declare image support, the plugin extracts text from images while their bytes are still available:
 
-- **Local OCR** with `tesseract` — free, deterministic, cached by content hash.
-- **Vision fallback** — when OCR finds no text (charts, photos, diagrams), a
-  vision-capable OpenCode model describes the image through a nested
-  `opencode run` call. It reuses the user's existing OpenCode credentials; no
-  API key is read, stored, or forwarded by this plugin.
+- **Local OCR** with `tesseract` — fast, deterministic, cached by content hash.
+- **Vision fallback** — when OCR finds no text (charts, photos, diagrams), a vision-capable OpenCode model describes the image through a nested `opencode run` call. It reuses the user's existing OpenCode configuration and credentials; this plugin does not read, store, or forward API keys.
 
-The result is a text part in place of the image:
+Converted images are replaced with a text part that includes the source, extraction method, and the extracted content:
 
 ```text
 [image — /home/you/.local/share/opencode/cache/image-compact/eb49a844ca83324e.png]
@@ -27,30 +20,19 @@ Do not assume it is complete.
 ...extracted text...
 ```
 
-The trigger is the selected model's live capabilities (`capabilities.input`
-from `ctx.model.list()`), not a model-exemption list. A free tier that
-load-balances may disagree with its own catalog; when it says images are
-unsupported, converting is still better than losing the image.
+Conversion is triggered from the selected model's live capabilities (`capabilities.input` from `ctx.model.list()`), not from a hardcoded model list. Set `force` to convert even when a model declares image input.
 
-## How it maps from the pi original
+## Features
 
-| pi extension | OpenCode V2 plugin |
-|---|---|
-| `pi.on("tool_result")` rewriting a read-tool result | `ctx.tool.hook("execute.after")` rewriting a completed tool result's `content` so image file parts never enter history |
-| `pi.on("context")` rewriting message content | `ctx.session.hook("context")` (plus `generate` and `compaction`, which pi covered with one hook) rewriting `event.messages` media parts |
-| `pi.registerTool({ name: "inspect_image", parameters: Type.Object(...) })` | `ctx.tool.transform` with `editor.add({ name, input: JSON Schema, execute })` |
-| `ctx.model.input` at call time | `ctx.model.list()` → `Model.Info.capabilities.input` for `event.model` |
-| nested `pi -p ... --no-extensions` child | nested `opencode run --model … --file … --auto --archived` with `OPENCODE_IMAGE_COMPACT_CHILD=1` so this plugin does not load in the child and recurse |
-| `PI_IMAGE_COMPACT_*` env vars | `ctx.options` from the `plugins` object form, with the old env vars kept as fallbacks |
-| `~/.pi/agent/cache/image-compact/` | `$XDG_DATA_HOME/opencode/cache/image-compact/` (default `~/.local/share/opencode/cache/image-compact/`) |
-
-`inspect_image` still runs sparse-text OCR (`--psm 11`) first and only asks
-the vision model when that comes back empty. It is always registered; pi's
-`exposure: "deferred"` has no V2 equivalent (see gaps).
+- **Request conversion**: rewrites image media parts in session hooks (`context`, `generate`, `compaction`) so text-only models receive descriptions instead of dropped images.
+- **Tool result conversion**: rewrites completed tool results so image file content does not enter persisted history for text-only models.
+- **`inspect_image` tool**: re-extracts an image with sparse-text OCR (`--psm 11` by default). If OCR still finds nothing, it can produce a focused vision description when `focus` is provided.
+- **Caching**: OCR and vision descriptions are cached by content hash under the configured cache directory.
+- **Recursion guard**: nested vision fallback runs set `OPENCODE_IMAGE_COMPACT_CHILD=1` so the plugin does not load in the child process.
 
 ## Load
 
-Add it to `opencode.json(c)` (global or project):
+Add it to `opencode.json` or `opencode.jsonc` (global or project):
 
 ```jsonc
 {
@@ -61,58 +43,45 @@ Add it to `opencode.json(c)` (global or project):
       "options": {
         "visionModel": "provider/model"
       }
-    },
-  ],
+    }
+  ]
 }
 ```
 
 For a local checkout, use the directory path instead of the package name:
 
 ```jsonc
-"plugins": [{ "package": "/home/you/Projects/opencode-image-compact", "options": {} }]
+{
+  "plugins": [{ "package": "/home/you/Projects/opencode-image-compact", "options": {} }]
+}
 ```
 
 Config changes reload without a restart; force one with `/reload` if needed.
-`opencode service restart` is only for a stuck service, not for plugin changes.
 
 ## Options
 
-Options come from `ctx.options`; every key also has an environment fallback
-(the legacy `PI_IMAGE_COMPACT_*` names still work).
+Options come from plugin `options`; each key also has an `OPENCODE_IMAGE_COMPACT_*` environment variable fallback.
 
-| Option | Env fallback | Default | Purpose |
+| Option | Environment variable | Default | Purpose |
 |---|---|---|---|
-| `visionModel` | `OPENCODE_IMAGE_COMPACT_MODEL`, `PI_IMAGE_COMPACT_MODEL` | first enabled image-capable model from `ctx.model.list()` | `provider/model` used by the vision fallback and `inspect_image` |
-| `force` | `OPENCODE_IMAGE_COMPACT_FORCE`, `PI_IMAGE_COMPACT_FORCE` | `false` | `true` converts even when the model declares image input |
-| `timeoutMs` | `OPENCODE_IMAGE_COMPACT_TIMEOUT_MS`, `PI_IMAGE_COMPACT_TIMEOUT_MS` | `120000` | per-image OCR / child-call timeout |
-| `ocr` | `OPENCODE_IMAGE_COMPACT_OCR`, `PI_IMAGE_COMPACT_OCR` | `true` | `false` skips OCR and always uses the vision model |
-| `ocrPsm` | `OPENCODE_IMAGE_COMPACT_OCR_PSM`, `PI_IMAGE_COMPACT_OCR_PSM` | `3` | tesseract PSM for the main pass |
-| `ocrPsmSparse` | `OPENCODE_IMAGE_COMPACT_OCR_PSM_SPARSE`, `PI_IMAGE_COMPACT_OCR_PSM_SPARSE` | `11` | tesseract PSM for `inspect_image` |
-| `cacheDir` | `OPENCODE_IMAGE_COMPACT_CACHE_DIR` | `<opencode cache>/image-compact` | where image bytes and descriptions are cached |
-| `bin` | `OPENCODE_IMAGE_COMPACT_BIN` | `opencode` | executable used for the nested vision call |
+| `visionModel` | `OPENCODE_IMAGE_COMPACT_MODEL` | first enabled image-capable model from `ctx.model.list()` | `provider/model` used by the vision fallback and `inspect_image` |
+| `force` | `OPENCODE_IMAGE_COMPACT_FORCE` | `false` | Convert even when the model declares image input |
+| `timeoutMs` | `OPENCODE_IMAGE_COMPACT_TIMEOUT_MS` | `120000` | Per-image OCR / vision-call timeout (ms) |
+| `ocr` | `OPENCODE_IMAGE_COMPACT_OCR` | `true` | Set to `false` to skip OCR and always use the vision model |
+| `ocrPsm` | `OPENCODE_IMAGE_COMPACT_OCR_PSM` | `3` | Tesseract page segmentation mode for the main OCR pass |
+| `ocrPsmSparse` | `OPENCODE_IMAGE_COMPACT_OCR_PSM_SPARSE` | `11` | Tesseract page segmentation mode for `inspect_image` |
+| `cacheDir` | `OPENCODE_IMAGE_COMPACT_CACHE_DIR` | `$XDG_DATA_HOME/opencode/cache/image-compact` (default `~/.local/share/opencode/cache/image-compact`) | Directory for cached image bytes and descriptions |
+| `bin` | `OPENCODE_IMAGE_COMPACT_BIN` | `opencode` | Executable used for nested vision fallback calls |
 
-`tesseract` must be on `PATH` for OCR. If it is missing or finds no text, the
-plugin falls back to the vision model.
+`tesseract` must be on `PATH` for OCR. If it is missing or finds no text, the plugin falls back to the vision model (when configured or auto-detected).
 
-## Known gaps / differences from pi
+## Notes
 
-- **Tool exposure.** pi's deferred `inspect_image` (found via `tool_search`)
-  has no V2 equivalent. The tool is registered normally with `codemode: true`,
-  so it is visible in the tool list and available in Code Mode.
-- **Hook coverage.** `context` runs for the agent loop, not for every request;
-  the plugin also registers `generate` and `compaction`. Titles are not
-  converted (they have no images in practice).
-- **Model on tool results.** The `execute.after` hook has no model field, so
-  it checks the session's selected model via `ctx.session.get`; the context
-  hook uses the exact request model. A per-request model override could make
-  these disagree.
-- **Child configuration.** pi's `PI_IMAGE_COMPACT_CHILD_EXTENSIONS` and
-  `PI_IMAGE_COMPACT_CHILD_TOOLS` do not apply. The nested `opencode run` uses
-  the user's normal OpenCode config, agents, and auth; `--auto` approves
-  permissions and the marker env var prevents plugin recursion.
-- **Part shapes.** Conversion targets OpenCode's lowered `media` parts, tool
-  `file` parts, and API-shaped user `files`; provider-specific image encodings
-  introduced by another plugin after this hook are out of scope.
-- **Tests.** The original had no test files, so none were ported.
+- **Hook coverage**: request conversion runs in `context`, `generate`, and `compaction` hooks to cover common request paths.
+- **Model selection**: `execute.after` determines image support from the session's selected model via `ctx.session.get`; request hooks use the request's model reference. Per-request overrides can make these differ.
+- **Part shapes**: conversion targets OpenCode `media` parts, tool `file` parts, and API-shaped user `files`. Provider-specific image encodings introduced after these hooks are out of scope.
+- **Nested vision calls**: fallback runs `opencode run --model … --file … --auto --archived` using the user's normal OpenCode configuration and auth.
+
+## License
 
 MIT. Copyright 2026 hakergeniusz.

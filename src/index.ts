@@ -55,7 +55,7 @@ export default Plugin.define({
       return []
     }
 
-    /** Model capability from the live registry, mirroring pi's `ctx.model.input`. */
+    /** Check model image capability from the live registry. */
     async function modelSeesImages(ref: ModelRef | undefined): Promise<boolean> {
       if (settings.force) return false
       const modelID = modelIdFromRef(ref)
@@ -116,7 +116,7 @@ export default Plugin.define({
       await ctx.session.hook(kind, (event) => convertRequest(event as unknown as RequestEvent))
     }
 
-    // Keep images out of persisted tool results, like pi's `tool_result` hook.
+    // Keep images out of persisted tool results.
     await ctx.tool.hook("execute.after", async (event) => {
       const e = event as unknown as ToolResultEvent
       if (e.status !== "completed" || e.result === undefined) return
